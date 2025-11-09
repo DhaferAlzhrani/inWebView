@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta http-equiv="Cache-Control" content="no-store" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>XOR Tool v2</title>
+<style>
+  body { font-family: system-ui, -apple-system, Roboto, "Segoe UI", Arial; padding: 18px; background:#f7fafc; color:#111; }
+  h1 { margin: 0 0 12px 0; font-size: 20px; }
+  .grid { display:flex; gap:12px; flex-wrap:wrap; }
+  .col { flex:1 1 320px; min-width:280px; background:#fff; border-radius:8px; padding:12px; box-shadow:0 1px 4px rgba(0,0,0,0.06); }
+  label { font-size:13px; font-weight:600; display:block; margin-bottom:6px; }
+  textarea { width:100%; height:180px; resize:vertical; padding:8px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", monospace; font-size:13px; }
+  .controls { margin-top:8px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  button { padding:8px 12px; border-radius:6px; border:1px solid #cbd5e1; background:#fff; cursor:pointer; }
+  select { padding:6px; border-radius:6px; }
+  pre { background:#0f172a; color:#e6edf3; padding:10px; border-radius:6px; overflow:auto; font-size:13px; }
+  .small { font-size:12px; color:#475569; margin-top:6px; }
+  .status { margin-top:8px; font-size:13px; color:#0f5132; }
+  .warning { color:#7c2d12; }
+  .badge { padding:2px 6px; border-radius:6px; background:#e2e8f0; }
+  .ok { background:#d1fae5; }
+  .no { background:#fee2e2; }
+</style>
+</head>
+<body>
+  <h1>XOR Playground — Key ⊕ Plain → Result</h1>
+  <div class="grid">
+    <div class="col">
+      <label for="key">Key (repeat/truncate to match plaintext)</label>
+      <textarea id="key" placeholder="Type or paste key here..."></textarea>
+      <div class="small">Inputs are sent to Flutter; Flutter computes XOR and returns the result.</div>
+    </div>
+
+    <div class="col">
+      <label for="plain">Plaintext</label>
+      <textarea id="plain" placeholder="Type or paste plaintext here..."></textarea>
+      <div class="small">Make sure this page is opened inside the app’s InAppBrowser.</div>
+    </div>
+  </div>
+
+  <div style="margin-top:12px; display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+    <div class="controls">
+      <button id="xorBtn">Compute XOR (Flutter)</button>
+      <button id="clearBtn">Clear</button>
+      <label style="display:inline-flex; align-items:center; gap:8px; margin-left:8px;">
+        Output:
+        <select id="outFormat">
+          <option value="hex">Hex</option>
+          <option value="utf8">UTF-8 (may be binary/unprintable)</option>
+        </select>
+      </label>
+    </div>
+
+    <div style="margin-left:auto;">
+      <span class="small">bridge:
+        <strong id="bridgeText" class="badge">unknown</strong>
+      </span>
+    </div>
+  </div>
+
+  <h2 style="margin-top:18px; font-size:15px;">Result</h2>
+  <pre id="result">(no result yet)</pre>
+  <div class="small">If bridge shows “not available”, you’re not inside the Flutter InAppWebView or the handler isn’t registered yet.</div>
+  <div id="log" class="status"></div>
+
+<script>
+  // ---------- Bridge detection ----------
+  function bridgeAvailable() {
+    return !!(window.flutter_inappwebview && typeof window.flutter_inappwebview.callHandler === "function");
+  }
+
+  function setBridgeStatus() {
+    const ok = bridgeAvailable();
+    const el = document.getElementById("bridgeText");
+    el.textContent = ok ? "available" : "not available";
+    el.className = "badge " + (ok ? "ok" : "no");
+  }
+  document.addEventListener("DOMContentLoaded", setBridgeStatus);
+  window.addEventListener("flutterHandlersReady", setBridgeStatus);
+  document.addEventListener("flutterInAppWebViewPlatformReady", setBridgeStatus);
+  setInterval(setBridgeStatus, 1000);
+
+  // Wait until the app announces handlers are ready
+  function onBridgeReady(fn) {
+    if (bridgeAvailable()) return fn();
+    window.addEventListener("flutterHandlersReady", fn, { once: true });
+    document.addEventListener("flutterInAppWebViewPlatformReady", fn, { once: true });
+    let tries = 0;
+    const t = setInterval(() => {
+      if (bridgeAvailable() || tries++ > 100) {
+        clearInterval(t);
+        if (bridgeAvailable()) fn();
+      }
+    }, 100);
+  }
+
+  // ---------- UI refs ----------
+  const $key    = () => document.getElementById("key");
+  const $plain  = () => document.getElementById("plain");
+  const $result = () => document.getElementById("result");
+  const $xorBtn = () => document.getElementById("xorBtn");
+  const $clrBtn = () => document.getElementById("clearBtn");
+  const $fmt    = () => document.getElementById("outFormat");
+  const $log    = () => document.getElementById("log");
+
+  function log(msg, warn=false) {
+    $log().textContent = msg;
+    $log().className = "status" + (warn ? " warning" : "");
+  }
+
+  // ---------- Actions ----------
+  async function xorViaFlutter() {
+    const key   = ($key()?.value ?? "");
+    const plain = ($plain()?.value ?? "");
+    const encoding = 'utf8'; // or 'hex' if you send hex strings
+    const output   = ($fmt()?.value === 'utf8') ? 'utf8' : 'hex';
+
+    if (!bridgeAvailable()) {
+      setBridgeStatus();
+      $result().textContent = "Bridge not available. Open inside the Flutter app (InAppBrowser) after handler registration.";
+      log("Bridge not available.", true);
+      return;
+    }
+
+    try {
+      // ✅ send ONE JSON object argument
+      const payload = { key, plain, encoding, output };
+      const res = await window.flutter_inappwebview.callHandler("xor", payload);
+
+      // support both shapes:
+      // A) { ok, data:{ len, hex/text } }   B) { len, hex/text }
+      let data = res;
+      if (res && typeof res === 'object' && 'ok' in res) {
+        if (!res.ok) {
+          $result().textContent = "Error from Flutter: " + (res.message || res.code || "unknown");
+          log("Flutter returned an error.", true);
+          return;
+        }
+        data = res.data || {};
+      }
+
+      const len = data.len ?? 0;
+      const out = (output === 'utf8') ? (data.text || '') : (data.hex || '');
+      $result().textContent = "Length: " + len + "\n\n" + out;
+      log("XOR computed in Flutter.");
+    } catch (e) {
+      console.error(e);
+      $result().textContent = "Error: " + (e?.message || String(e));
+      log("JS exception during callHandler.", true);
+    }
+  }
+
+  function clearAll() {
+    if ($key())   $key().value = "";
+    if ($plain()) $plain().value = "";
+    if ($result()) $result().textContent = "(cleared)";
+    log("Cleared.");
+  }
+
+  // ---------- Wire up ----------
+  document.addEventListener("DOMContentLoaded", () => {
+    setBridgeStatus();
+    window.addEventListener("flutterHandlersReady", () => { setBridgeStatus(); log("Flutter handlers ready."); });
+    document.addEventListener("flutterInAppWebViewPlatformReady", () => { setBridgeStatus(); log("Platform bridge ready."); });
+
+    $xorBtn()?.addEventListener("click", () => onBridgeReady(xorViaFlutter));
+    $clrBtn()?.addEventListener("click", clearAll);
+  });
+</script>
+</body>
+</html>
