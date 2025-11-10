@@ -8,7 +8,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:web_view_crypto/main.dart';
+import 'package:web_view_crypto/main.dart.back';
 
 void main() {
   testWidgets('Counter increments smoke test', (WidgetTester tester) async {
