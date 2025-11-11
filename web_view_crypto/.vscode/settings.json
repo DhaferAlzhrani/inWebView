@@ -1,0 +1,8 @@
+{
+    "files.associations": {
+        "random": "cpp",
+        "utils.h": "c",
+        "helper.h": "c",
+        "aes.h": "c"
+    }
+}

@@ -1,37 +1,169 @@
 <!DOCTYPE html>
-<html>
-  <body style="font-family: sans-serif;">
-    <h2>XOR Encrypt via Flutter</h2>
+<html lang="en">
 
-    <label>Plain:</label><br>
-    <input id="plain" style="width: 250px"><br><br>
+<head>
+  <meta charset="UTF-8">
+  <title>WebCrypto + Flutter FFI AES-GCM Benchmark</title>
 
-    <label>Key:</label><br>
-    <input id="key" style="width: 250px"><br><br>
+  <!-- your helper functions -->
+  <script type="text/javascript" src="common.js"></script>
 
-    <button onclick="doXor()">Encrypt</button>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 24px; }
+    input { width: 400px; }
+    pre { background:#111; color:#0f0; padding:12px; white-space:pre-wrap; }
+    button { margin-left: 6px; }
+  </style>
 
-    <h3>Result:</h3>
-    <pre id="result"></pre>
+  <script>
+    /********************  
+     * CONFIG
+     ********************/
+    var keyData = hexStringToUint8Array(
+      "2b7e151628aed2a6abf7158809cf4f3c2b7e151628aed2a6abf7158809cf4f3c"
+    );
+    // 16-byte recommended
+    var iv = hexStringToUint8Array("000102030405060708090a0b0c0d0e0f");
 
-    <script>
-      async function doXor() {
-        const plain = document.getElementById("plain").value;
-        const key   = document.getElementById("key").value;
 
-        try {
-          const res = await window.flutter_inappwebview.callHandler(
-            "xorRequest",
-            plain,
-            key
-          );
+    /********************  
+     * WebCrypto AES-GCM
+     ********************/
+    async function AES_GCM_encrypt_JS() {
+      try {
+        var plain = document.getElementById("InputPlainText").value;
+        var plainBytes = asciiToUint8Array(plain);
 
-          document.getElementById("result").textContent = res;
-        } catch (e) {
-          document.getElementById("result").textContent =
-            "ERROR: " + e.toString();
-        }
+        const t0 = performance.now();
+
+        const key = await crypto.subtle.importKey(
+          "raw",
+          keyData,
+          { name: "AES-GCM" },
+          false,
+          ["encrypt"]
+        );
+
+        const enc = await crypto.subtle.encrypt(
+          {
+            name: "AES-GCM",
+            iv: iv,
+            tagLength: 128
+          },
+          key,
+          plainBytes
+        );
+
+        const t1 = performance.now();
+        const dt = (t1 - t0).toFixed(3);
+
+        const buf = new Uint8Array(enc);
+        const tag = buf.slice(buf.length - 16);
+        const ct  = buf.slice(0, buf.length - 16);
+
+        const ctHex  = bytesToHexString(ct);
+        const tagHex = bytesToHexString(tag);
+
+        // show in textbox
+        document.getElementById("InputCipherText").value = ctHex + tagHex;
+
+        document.getElementById("result").innerText =
+          "[WebCrypto AES-GCM]\n" +
+          "cipher : " + ctHex + "\n" +
+          "tag    : " + tagHex + "\n" +
+          "time   : " + dt + " ms";
+
+      } catch (e) {
+        document.getElementById("result").innerText =
+          "ERROR(WebCrypto): " + e;
       }
-    </script>
-  </body>
+    }
+
+
+    /********************  
+     * Flutter-FFI AES-GCM
+     ********************/
+    function AES_GCM_encrypt_Flutter() {
+
+      var plain = document.getElementById("InputPlainText").value;
+
+      const b64 = (bytes) => btoa(String.fromCharCode(...bytes));
+
+      const msg = {
+        cmd: "encrypt",
+        plain: plain,
+        key: b64(keyData),
+        iv : b64(iv),
+        // no AAD for now
+      };
+
+      if (!window.flutter_inappwebview) {
+        document.getElementById("result").innerText =
+          "ERROR: Not inside Flutter WebView";
+        return;
+      }
+
+      const t0 = performance.now();
+
+      window.flutter_inappwebview.callHandler("CryptoBridge", msg)
+        .then(res => {
+          const t1 = performance.now();
+          const dt = (t1 - t0).toFixed(3);
+
+          if(!res.ok){
+            document.getElementById("result").innerText =
+              "ERROR(Flutter): " + res.error;
+            return;
+          }
+
+          // Flutter already returns hex
+          const ctHex  = res.ciphertext;
+          const tagHex = res.tag;
+
+          // show in textbox
+          document.getElementById("InputCipherText").value =
+            ctHex + tagHex;
+
+          document.getElementById("result").innerText =
+            "[Flutter FFI AES-GCM]\n" +
+            "cipher : " + ctHex + "\n" +
+            "tag    : " + tagHex + "\n" +
+            "time   : " + dt + " ms";
+        })
+        .catch(err => {
+          document.getElementById("result").innerText =
+            "ERROR(Flutter): " + err;
+        });
+    }
+  </script>
+</head>
+
+<body>
+
+  <h1>WebCrypto + Flutter FFI AES-GCM Benchmark</h1>
+
+  <p>
+    Compare in-browser WebCrypto AES-GCM vs. Flutter-FFI native AES-GCM.
+  </p>
+
+  <!-- PLAINTEXT -->
+  <div>
+    Plain Text:&emsp;
+    <input type="text" id="InputPlainText" value="Hello, World!" size="50">
+    <button type="button" onclick="AES_GCM_encrypt_JS()">encrypt-JS</button>
+    <button type="button" onclick="AES_GCM_encrypt_Flutter()">encrypt-Flutter</button>
+  </div>
+
+  <!-- CIPHERTEXT -->
+  <div>
+    <br>
+    CipherText:&nbsp;
+    <input type="text" id="InputCipherText" size="80">
+  </div>
+
+  <br>
+
+  <pre id="result"></pre>
+
+</body>
 </html>
