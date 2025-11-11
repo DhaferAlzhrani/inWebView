@@ -3,7 +3,16 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
-import 'package:web_view_crypto/ll_crypto.dart';   // contains AesGcmFfi()
+import 'package:web_view_crypto/ll_crypto.dart'; // contains AesGcmFfi()
+
+Uint8List _hexToBytes(String hex) {
+  final len = hex.length;
+  final out = Uint8List(len ~/ 2);
+  for (int i = 0; i < len; i += 2) {
+    out[i ~/ 2] = int.parse(hex.substring(i, i + 2), radix: 16);
+  }
+  return out;
+}
 
 void main() {
   runApp(const AESDemo());
@@ -14,10 +23,7 @@ class AESDemo extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: "AES-GCM WebView Demo",
-      home: AESPage(),
-    );
+    return MaterialApp(title: "AES-GCM WebView Demo", home: AESPage());
   }
 }
 
@@ -37,7 +43,7 @@ class _AESPageState extends State<AESPage> {
       body: SafeArea(
         child: InAppWebView(
           initialUrlRequest: URLRequest(
-            url: WebUri("http://192.168.8.75:3000"),
+            url: WebUri("http://192.168.8.20:3000"),
           ),
           initialSettings: InAppWebViewSettings(javaScriptEnabled: true),
           onWebViewCreated: (controller) {
@@ -66,33 +72,54 @@ class _AESPageState extends State<AESPage> {
       }
 
       final obj = args[0] as Map<String, dynamic>;
-      if (obj["cmd"] != "encrypt") {
-        return {"ok": false, "error": "unknown cmd"};
+      final cmd = obj["cmd"];
+
+      if (cmd == "encrypt") {
+        final key = _hexToBytes(obj["key"]);
+        final iv = _hexToBytes(obj["iv"]);
+        final aad = obj["aad"] != null ? _hexToBytes(obj["aad"]) : Uint8List(0);
+
+        final plain = Uint8List.fromList(utf8.encode(obj["plain"]));
+
+        final result = _ffi.encrypt(key: key, iv: iv, plain: plain, aad: aad);
+
+        final tEnd = DateTime.now();
+        final dt = tEnd.difference(tStart).inMicroseconds / 1000.0;
+
+        return {
+          "ok": true,
+          "ciphertext": _hex(result["ciphertext"]!),
+          "tag": _hex(result["tag"]!),
+          "time_ms": dt.toStringAsFixed(3),
+        };
       }
 
-      final key = Uint8List.fromList(base64.decode(obj["key"]));
-      final iv = Uint8List.fromList(base64.decode(obj["iv"]));
-      final aad = obj["aad"] != null
-          ? Uint8List.fromList(base64.decode(obj["aad"]))
-          : Uint8List(0);
-      final plain = Uint8List.fromList(utf8.encode(obj["plain"]));
+      // ✅ NEW: DECRYPT
+      if (cmd == "decrypt") {
+        final key = _hexToBytes(obj["key"]);
+        final iv = _hexToBytes(obj["iv"]);
+        final aad = obj["aad"] != null ? _hexToBytes(obj["aad"]) : Uint8List(0);
 
-      final result = _ffi.encrypt(
-        key: key,
-        iv: iv,
-        plain: plain,
-        aad: aad,
-      );
+        final ciphertext = _hexToBytes(obj["ciphertext"]);
+        final tag = _hexToBytes(obj["tag"]);
 
-      final tEnd = DateTime.now();
-      final dt = tEnd.difference(tStart).inMicroseconds / 1000.0;
+        final result = _ffi.decrypt(
+          key: key,
+          iv: iv,
+          ciphertext: ciphertext,
+          tag: tag,
+          aad: aad,
+        );
 
-      return {
-        "ok": true,
-        "ciphertext": _hex(result["ciphertext"]!),
-        "tag": _hex(result["tag"]!),
-        "time_ms": dt.toStringAsFixed(3),
-      };
+        final plain = utf8.decode(result);
+
+        final tEnd = DateTime.now();
+        final dt = tEnd.difference(tStart).inMicroseconds / 1000.0;
+
+        return {"ok": true, "plain": plain, "time_ms": dt.toStringAsFixed(3)};
+      }
+
+      return {"ok": false, "error": "unknown cmd"};
     } catch (e) {
       return {"ok": false, "error": e.toString()};
     }

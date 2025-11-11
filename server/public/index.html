@@ -2,37 +2,139 @@
 <html lang="en">
 
 <head>
-  <meta charset="UTF-8">
-  <title>WebCrypto + Flutter FFI AES-GCM Benchmark</title>
+  <meta charset="UTF-8" />
+  <title>AES-GCM WebCrypto + Flutter FFI Benchmark</title>
 
-  <!-- your helper functions -->
-  <script type="text/javascript" src="common.js"></script>
+  <!-- helper -->
+  <script src="common.js"></script>
 
   <style>
-    body { font-family: system-ui, sans-serif; margin: 24px; }
-    input { width: 400px; }
-    pre { background:#111; color:#0f0; padding:12px; white-space:pre-wrap; }
-    button { margin-left: 6px; }
+    body {
+      font-family: system-ui, sans-serif;
+      margin: 16px;
+      font-size: 18px;
+      line-height: 1.5;
+    }
+
+    .container {
+      max-width: 700px;
+      margin: auto;
+    }
+
+    input {
+      width: 100%;
+      font-size: 18px;
+      padding: 10px;
+      margin-top: 8px;
+      box-sizing: border-box;
+    }
+
+    button {
+      font-size: 17px;
+      padding: 12px 16px;
+      margin-top: 8px;
+      margin-right: 6px;
+    }
+
+    @media (max-width: 480px) {
+      button {
+        width: 100%;
+      }
+    }
+
+    pre {
+      background: #111;
+      color: #0f0;
+      padding: 14px;
+      font-size: 16px;
+      white-space: pre-wrap;
+    }
+
+    label {
+      font-weight: bold;
+    }
   </style>
+</head>
+
+<body>
+  <div class="container">
+    <h2>AES-GCM WebCrypto + Flutter FFI Benchmark</h2>
+    <p>Compare in-browser WebCrypto AES-GCM vs Flutter native AES-GCM (FFI).</p>
+
+    <!-- PLAINTEXT -->
+    <label for="InputPlainText">Plain Text (hex or ASCII):</label>
+    <input type="text" id="InputPlainText" value="Hello, World!">
+
+    <button onclick="AES_GCM_encrypt_JS()">Encrypt-JS</button>
+    <button onclick="AES_GCM_encrypt_Flutter()">Encrypt-Flutter</button>
+    <button onclick="AES_GCM_decrypt_Flutter()">Decrypt-Flutter</button>
+
+    <!-- RANDOM -->
+    <div style="margin-top:14px;">
+      <label>Random size (bytes): </label>
+      <input id="RandSize" type="number" value="1024" style="width:140px;">
+      <button onclick="GenerateRandomAndEncrypt()">Gen-Random</button>
+    </div>
+
+    <!-- CIPHERTEXT -->
+    <br />
+    <label for="InputCipherText">CipherText + Tag (hex):</label>
+    <input type="text" id="InputCipherText">
+
+    <br><br />
+    <pre id="result"></pre>
+
+  </div>
 
   <script>
-    /********************  
+    /********************************
      * CONFIG
-     ********************/
+     ********************************/
     var keyData = hexStringToUint8Array(
       "2b7e151628aed2a6abf7158809cf4f3c2b7e151628aed2a6abf7158809cf4f3c"
     );
-    // 16-byte recommended
+
+    // NOTE: Must be 12 bytes for WebCrypto.  Here we use 16 bytes only for FFI.
+    // JS will use iv.slice(0,12)
     var iv = hexStringToUint8Array("000102030405060708090a0b0c0d0e0f");
 
+    /********************************
+     * Random
+     ********************************/
+    function randomBytes(len) {
+      const arr = new Uint8Array(len);
+      crypto.getRandomValues(arr);
+      return arr;
+    }
 
-    /********************  
-     * WebCrypto AES-GCM
-     ********************/
+    /********************************
+     * Pretty time formatting
+     ********************************/
+    function toMs(value, unit = 'ms') {
+      if (typeof value === 'bigint') {
+        const ns = Number(value);
+        return ns / 1e6;
+      }
+      const n = Number(value);
+      if (!isFinite(n)) return NaN;
+      return n;
+    }
+
+    function fmtTimeMs(tMs) {
+      if (!isFinite(tMs)) return '—';
+      return tMs < 1 ? (tMs * 1000).toFixed(2) + ' µs'
+        : tMs.toFixed(3) + ' ms';
+    }
+
+    /********************************
+     * WebCrypto AES-GCM encrypt
+     ********************************/
     async function AES_GCM_encrypt_JS() {
       try {
-        var plain = document.getElementById("InputPlainText").value;
-        var plainBytes = asciiToUint8Array(plain);
+        var plainText = document.getElementById("InputPlainText").value;
+
+        let plainBytes;
+        plainBytes = asciiToUint8Array(plainText);
 
         const t0 = performance.now();
 
@@ -44,12 +146,9 @@
           ["encrypt"]
         );
 
+        // WebCrypto requires 12-byte IV
         const enc = await crypto.subtle.encrypt(
-          {
-            name: "AES-GCM",
-            iv: iv,
-            tagLength: 128
-          },
+          { name: "AES-GCM", iv: iv.slice(0, 16), tagLength: 128 },
           key,
           plainBytes
         );
@@ -59,18 +158,19 @@
 
         const buf = new Uint8Array(enc);
         const tag = buf.slice(buf.length - 16);
-        const ct  = buf.slice(0, buf.length - 16);
+        const ct = buf.slice(0, buf.length - 16);
 
-        const ctHex  = bytesToHexString(ct);
+        const ctHex = bytesToHexString(ct);
         const tagHex = bytesToHexString(tag);
 
-        // show in textbox
         document.getElementById("InputCipherText").value = ctHex + tagHex;
 
         document.getElementById("result").innerText =
           "[WebCrypto AES-GCM]\n" +
           "cipher : " + ctHex + "\n" +
           "tag    : " + tagHex + "\n" +
+          "len    : " + ct.length + " bytes\n" +
+          "tagLen : " + tag.length + " bytes\n" +
           "time   : " + dt + " ms";
 
       } catch (e) {
@@ -79,22 +179,17 @@
       }
     }
 
-
-    /********************  
-     * Flutter-FFI AES-GCM
-     ********************/
+    /********************************
+     * Flutter Encrypt
+     ********************************/
     function AES_GCM_encrypt_Flutter() {
-
-      var plain = document.getElementById("InputPlainText").value;
-
-      const b64 = (bytes) => btoa(String.fromCharCode(...bytes));
+      var plainText = document.getElementById("InputPlainText").value;
 
       const msg = {
         cmd: "encrypt",
-        plain: plain,
-        key: b64(keyData),
-        iv : b64(iv),
-        // no AAD for now
+        plain: plainText,
+        key: bytesToHexString(keyData),
+        iv: bytesToHexString(iv),
       };
 
       if (!window.flutter_inappwebview) {
@@ -110,60 +205,119 @@
           const t1 = performance.now();
           const dt = (t1 - t0).toFixed(3);
 
-          if(!res.ok){
+          if (!res.ok) {
             document.getElementById("result").innerText =
               "ERROR(Flutter): " + res.error;
             return;
           }
 
-          // Flutter already returns hex
-          const ctHex  = res.ciphertext;
+          const ctHex = res.ciphertext;
           const tagHex = res.tag;
+          const Fdt = res.time_ms;
 
-          // show in textbox
-          document.getElementById("InputCipherText").value =
-            ctHex + tagHex;
+          document.getElementById("InputCipherText").value = ctHex + tagHex;
+
+          const dtMs = toMs(dt);
+          const FdtMs = toMs(Fdt);
 
           document.getElementById("result").innerText =
             "[Flutter FFI AES-GCM]\n" +
             "cipher : " + ctHex + "\n" +
             "tag    : " + tagHex + "\n" +
-            "time   : " + dt + " ms";
+            "len    : " + (ctHex.length / 2) + " bytes\n" +
+            "time crypto engine:  " + fmtTimeMs(FdtMs) + "\n" +
+            "time crypto bridge: " + fmtTimeMs(dtMs);
         })
         .catch(err => {
           document.getElementById("result").innerText =
             "ERROR(Flutter): " + err;
         });
     }
+
+    /********************************
+     * Flutter Decrypt
+     ********************************/
+    function AES_GCM_decrypt_Flutter() {
+      const txt = document.getElementById("InputCipherText").value.trim();
+      if (!txt || txt.length < 32) {
+        document.getElementById("result").innerText = "ERROR: No ciphertext/tag";
+        return;
+      }
+
+      const ctHex = txt.slice(0, -32);
+      const tagHex = txt.slice(-32);
+
+      const msg = {
+        cmd: "decrypt",
+        ciphertext: ctHex,
+        tag: tagHex,
+        key: bytesToHexString(keyData),
+        iv: bytesToHexString(iv),
+      };
+
+      if (!window.flutter_inappwebview) {
+        document.getElementById("result").innerText =
+          "ERROR: Not inside Flutter WebView";
+        return;
+      }
+
+      const t0 = performance.now();
+
+      window.flutter_inappwebview.callHandler("CryptoBridge", msg)
+        .then(res => {
+          const t1 = performance.now();
+          const dt = (t1 - t0).toFixed(3);
+
+          if (!res.ok) {
+            document.getElementById("result").innerText =
+              "ERROR(Flutter): " + res.error;
+            return;
+          }
+
+          let plainText = "";
+          try {
+            plainText = res.plain;
+          } catch (_) {
+            plainText = "(decode error)";
+          }
+
+          const dtMs = toMs(dt);
+          const FdtMs = toMs(res.time_ms);
+
+          document.getElementById("result").innerText =
+            "[Flutter FFI AES-GCM DECRYPT]\n" +
+            "plain : " + plainText + "\n" +
+            "time crypto engine:  " + fmtTimeMs(FdtMs) + "\n" +
+            "time crypto bridge: " + fmtTimeMs(dtMs);
+        })
+        .catch(err => {
+          document.getElementById("result").innerText =
+            "ERROR(Flutter): " + err;
+        });
+    }
+
+    /********************************
+     * Random → encrypt JS
+     ********************************/
+    async function GenerateRandomAndEncrypt() {
+      try {
+        const size = parseInt(document.getElementById("RandSize").value);
+        if (isNaN(size) || size <= 0) {
+          alert("Invalid size");
+          return;
+        }
+        const plainBytes = randomBytes(size);
+        const hex = bytesToHexString(plainBytes);
+
+        document.getElementById("InputPlainText").value = hex;
+
+      } catch (e) {
+        document.getElementById("result").innerText =
+          "ERROR(Random): " + e;
+      }
+    }
   </script>
-</head>
-
-<body>
-
-  <h1>WebCrypto + Flutter FFI AES-GCM Benchmark</h1>
-
-  <p>
-    Compare in-browser WebCrypto AES-GCM vs. Flutter-FFI native AES-GCM.
-  </p>
-
-  <!-- PLAINTEXT -->
-  <div>
-    Plain Text:&emsp;
-    <input type="text" id="InputPlainText" value="Hello, World!" size="50">
-    <button type="button" onclick="AES_GCM_encrypt_JS()">encrypt-JS</button>
-    <button type="button" onclick="AES_GCM_encrypt_Flutter()">encrypt-Flutter</button>
-  </div>
-
-  <!-- CIPHERTEXT -->
-  <div>
-    <br>
-    CipherText:&nbsp;
-    <input type="text" id="InputCipherText" size="80">
-  </div>
-
-  <br>
-
-  <pre id="result"></pre>
 
 </body>
+
 </html>
